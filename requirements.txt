@@ -1,0 +1,6 @@
+fastapi
+uvicorn
+duckdb
+pymongo
+python-dotenv
+phonenumbers
