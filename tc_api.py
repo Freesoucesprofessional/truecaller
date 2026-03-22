@@ -1,13 +1,7 @@
 """
-TrueCaller India API  —  v1.0
+TrueCaller India API  —  v1.1
 512MB Render free tier compatible.
-Separate API for TrueCaller dataset (137M rows)
-
-Strategy:
-  - Same on-demand index approach as dataset-india API
-  - Mobile: 3-digit prefix index parts
-  - Email: domain partitioned index
-  - Max RAM per query: ~150MB
+137M TrueCaller rows from tc-data R2 bucket.
 """
 
 import re, os, logging, time as _time
@@ -40,11 +34,14 @@ KEY_DB        = os.getenv("KEY_DB_NAME", "keystore")
 MAX_RESULTS   = int(os.getenv("MAX_RESULTS", "10"))
 KNOWN_TOTAL   = 137_365_430
 
-EMAIL_KNOWN = {
-    "gmail", "yahoo", "hotmail", "rediffmail",
-    "ymail", "live", "outlook", "icloud",
-    "other"
+# domains that have their own file (not split by letter)
+EMAIL_SINGLE_DOMAINS = {
+    "rediffmail", "hotmail", "ymail",
+    "outlook", "icloud", "live"
 }
+
+# domains split by first letter of username
+EMAIL_SPLIT_DOMAINS = {"gmail", "yahoo"}
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
 log = logging.getLogger(__name__)
@@ -121,7 +118,7 @@ async def lifespan(app):
 # ── app ───────────────────────────────────────────────────
 app = FastAPI(
     title="TrueCaller India API",
-    version="1.0.0",
+    version="1.1.0",
     docs_url=None,
     redoc_url=None,
     lifespan=lifespan,
@@ -229,9 +226,7 @@ def phone_meta(n: str) -> dict:
 
 
 # ── name cols ─────────────────────────────────────────────
-_NAME_COLS = {
-    "name", "fullname", "full name",
-}
+_NAME_COLS = {"name", "fullname", "full name"}
 
 
 # ── find files ────────────────────────────────────────────
@@ -270,11 +265,27 @@ def find_files_by_alt(mobile: str) -> list[str]:
 def find_files_by_email(email: str) -> list[str]:
     em = email.lower().strip()
     try:
-        domain = em.split("@")[1].split(".")[0]
+        parts    = em.split("@")
+        username = parts[0]
+        domain   = parts[1].split(".")[0]
+        first    = username[0] if username else "a"
+        # sanitize first char for filename
+        if not first.isalnum(): first = "_"
     except:
-        domain = "other"
-    part    = domain if domain in EMAIL_KNOWN else "other"
+        domain, first = "other", "a"
+
+    # gmail and yahoo → split by first letter
+    if domain in EMAIL_SPLIT_DOMAINS:
+        part = f"{domain}_{first}"
+    # known domains → own file
+    elif domain in EMAIL_SINGLE_DOMAINS:
+        part = domain
+    # everything else → other
+    else:
+        part = "other"
+
     idx_url = f"s3://{BUCKET}/{EMAIL_INDEX}/email_{part}.parquet"
+
     try:
         rows = duck().execute(f"""
             SELECT DISTINCT _file
@@ -308,10 +319,10 @@ def fetch_rows(files: list[str], col: str, val: str) -> list[dict]:
         seen = set()
 
         for row in rel.fetchall():
-            r = {}
-            name_found  = False
-            mobile_val  = None
-            name_val    = None
+            r          = {}
+            name_found = False
+            mobile_val = None
+            name_val   = None
 
             for c, v in zip(cols, row):
                 if c == "_mobile":
@@ -334,7 +345,7 @@ def fetch_rows(files: list[str], col: str, val: str) -> list[dict]:
             if not r:
                 continue
 
-            dedup_key = mobile_val or f"{name_val}:{r.get('Address','')}"
+            dedup_key = mobile_val or f"{name_val}:{r.get('Address', '')}"
             if dedup_key in seen:
                 continue
             seen.add(dedup_key)
@@ -360,7 +371,6 @@ async def by_number(
     cached = cache_get(f"mob:{n}")
     if cached:
         return cached
-
     files  = find_files_by_mobile(n)
     rows   = fetch_rows(files, "_mobile", n)
     result = {
@@ -382,7 +392,6 @@ async def by_email(
     cached = cache_get(f"eml:{em}")
     if cached:
         return cached
-
     files  = find_files_by_email(em)
     rows   = fetch_rows(files, "_email", em)
     result = {
@@ -403,7 +412,6 @@ async def by_alternate(
     cached = cache_get(f"alt:{n}")
     if cached:
         return cached
-
     files  = find_files_by_alt(n)
     rows   = fetch_rows(files, "_alt_mobile", n)
     result = {
@@ -477,7 +485,7 @@ async def health():
 async def root():
     return {
         "api":           "TrueCaller India API",
-        "version":       "1.0.0",
+        "version":       "1.1.0",
         "total_records": KNOWN_TOTAL,
         "endpoints": {
             "by_number":    "GET /search/ind/number?q=9811063283",
