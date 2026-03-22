@@ -226,7 +226,10 @@ def phone_meta(n: str) -> dict:
 
 
 # ── name cols ─────────────────────────────────────────────
-_NAME_COLS = {"name", "fullname", "full name"}
+_NAME_COLS = {
+    "name", "fullname", "full name",
+    "Name", "Name_1",  # TrueCaller uses capital N
+}
 
 
 # ── find files ────────────────────────────────────────────
@@ -325,10 +328,20 @@ def fetch_rows(files: list[str], col: str, val: str) -> list[dict]:
             name_val   = None
 
             for c, v in zip(cols, row):
+                # skip internal index columns but KEEP the value
                 if c == "_mobile":
                     mobile_val = str(v).strip() if v else None
+                    # ADD mobile to result so frontend can show it
+                    if mobile_val:
+                        r["Mobile"] = mobile_val
                     continue
-                if c in ("_alt_mobile", "_email", "filename"):
+                if c == "_email":
+                    if v:
+                        email_val = str(v).strip()
+                        if email_val.lower() not in ("", "nan", "none", "null"):
+                            r["Email"] = email_val
+                    continue
+                if c in ("_alt_mobile", "filename"):
                     continue
                 if v is None:
                     continue
@@ -337,7 +350,9 @@ def fetch_rows(files: list[str], col: str, val: str) -> list[dict]:
                     continue
                 display_col = "_source_file" if c == "_source" else c
                 r[display_col] = s
-                if not name_found and c.strip().lower() in _NAME_COLS:
+                if not name_found and c.strip().lower() in {
+                    "name", "fullname", "full name"
+                }:
                     r["name"] = s
                     name_val   = s
                     name_found = True
